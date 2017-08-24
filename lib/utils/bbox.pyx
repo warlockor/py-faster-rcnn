@@ -23,6 +23,7 @@ def bbox_overlaps(
     Returns
     -------
     overlaps: (N, K) ndarray of overlap between boxes and query_boxes
+    overlap_area / (box_area + query_box_area - overlap_area) the overlap ratio
     """
     cdef unsigned int N = boxes.shape[0]
     cdef unsigned int K = query_boxes.shape[0]

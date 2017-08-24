@@ -21,11 +21,14 @@ class AnchorTargetLayer(caffe.Layer):
     """
     Assign anchors to ground-truth targets. Produces anchor classification
     labels and bounding-box regression targets.
+    Example: self.param_str_ ---> "'feat_stride': 16 \n'scales': !!python/tuple [4, 8, 16, 32]" a yaml config string
+    the keys of param_str_: allowed_border:float, feat_stride:int, scales:tuple of int
     """
 
     def setup(self, bottom, top):
         layer_params = yaml.load(self.param_str_)
         anchor_scales = layer_params.get('scales', (8, 16, 32))
+        # the anchors is generated based on bbox [0, 0, 15, 15]
         self._anchors = generate_anchors(scales=np.array(anchor_scales))
         self._num_anchors = self._anchors.shape[0]
         self._feat_stride = layer_params['feat_stride']
@@ -71,10 +74,12 @@ class AnchorTargetLayer(caffe.Layer):
         # filter out-of-image anchors
         # measure GT overlap
 
+        # bottom[0] is the rpn_cls_score the foreground background classification prob (only the shape is used)
+        # single item batches in training
         assert bottom[0].data.shape[0] == 1, \
             'Only single item batches are supported'
 
-        # map of shape (..., H, W)
+        # map of shape (..., H, W) w, h of feature map
         height, width = bottom[0].data.shape[-2:]
         # GT boxes (x1, y1, x2, y2, label)
         gt_boxes = bottom[1].data
@@ -90,6 +95,7 @@ class AnchorTargetLayer(caffe.Layer):
             print 'rpn: gt_boxes', gt_boxes
 
         # 1. Generate proposals from bbox deltas and shifted anchors
+        # shift based on origin image size
         shift_x = np.arange(0, width) * self._feat_stride
         shift_y = np.arange(0, height) * self._feat_stride
         shift_x, shift_y = np.meshgrid(shift_x, shift_y)
@@ -132,8 +138,10 @@ class AnchorTargetLayer(caffe.Layer):
         overlaps = bbox_overlaps(
             np.ascontiguousarray(anchors, dtype=np.float),
             np.ascontiguousarray(gt_boxes, dtype=np.float))
+        # the index of max overlap for each anchors
         argmax_overlaps = overlaps.argmax(axis=1)
         max_overlaps = overlaps[np.arange(len(inds_inside)), argmax_overlaps]
+        # the index of max overlap for gt_box
         gt_argmax_overlaps = overlaps.argmax(axis=0)
         gt_max_overlaps = overlaps[gt_argmax_overlaps,
                                    np.arange(overlaps.shape[1])]
@@ -174,6 +182,7 @@ class AnchorTargetLayer(caffe.Layer):
         bbox_targets = np.zeros((len(inds_inside), 4), dtype=np.float32)
         bbox_targets = _compute_targets(anchors, gt_boxes[argmax_overlaps, :])
 
+        # assign smoothl1 loss weight, the weight with -1 label will be assigned with 0
         bbox_inside_weights = np.zeros((len(inds_inside), 4), dtype=np.float32)
         bbox_inside_weights[labels == 1, :] = np.array(cfg.TRAIN.RPN_BBOX_INSIDE_WEIGHTS)
 
@@ -205,6 +214,7 @@ class AnchorTargetLayer(caffe.Layer):
             print stds
 
         # map up to original set of anchors
+        # the useful anchors will be kept, invalid value will fill the value with "fill" parameter
         labels = _unmap(labels, total_anchors, inds_inside, fill=-1)
         bbox_targets = _unmap(bbox_targets, total_anchors, inds_inside, fill=0)
         bbox_inside_weights = _unmap(bbox_inside_weights, total_anchors, inds_inside, fill=0)
